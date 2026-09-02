@@ -9,5 +9,5 @@ basesim
 # Temporary files
 tmp/
 
-# Test output
-*.txt
+# Temporary files
+test_results.txt

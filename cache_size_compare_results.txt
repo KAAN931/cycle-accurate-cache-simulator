@@ -1,0 +1,25 @@
+DATA-CACHE SIZE COMPARISON
+==========================
+
+Benchmark: inputs/cache/capacity.x
+Fixed parameters: 32-byte blocks, 8-way associativity
+Changed parameter: DATA_CACHE_SIZE_BYTES
+Baseline simulator: 36,890 cycles, IPC 0.667
+
+Cache size   Baseline cycles   Simulator cycles   Baseline IPC   Simulator IPC   Register comparison
+16 KiB       36,890            344,190            0.667          0.071           OK
+32 KiB       36,890            344,190            0.667          0.071           OK
+64 KiB       36,890            113,790            0.667          0.216           OK
+128 KiB      36,890            113,790            0.667          0.216           OK
+
+All configurations retired 24,600 instructions with identical architectural
+register contents. The benchmark scans a 48 KiB working set four times. It
+thrashes in the 16 KiB and 32 KiB caches, but it fits in the 64 KiB and
+128 KiB caches, allowing the final three passes to hit.
+
+Commands used (replace VALUE with 16384, 32768, 65536, or 131072):
+  gcc -g -O2 -DDATA_CACHE_SIZE_BYTES=VALUE src/*.c -o sim
+  python3 run.py inputs/cache/capacity.x
+
+The simulator was restored to the default configuration after the sweep:
+  gcc -g -O2 src/*.c -o sim

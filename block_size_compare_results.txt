@@ -1,0 +1,20 @@
+DATA-CACHE BLOCK-SIZE COMPARISON
+================================
+
+Benchmark: inputs/cache/stride1.x
+Fixed parameters: 64 KiB data cache, 8-way associativity
+Changed parameter: DATA_CACHE_BLOCK_SIZE_BYTES
+Baseline simulator: 57,352 cycles, IPC 0.714
+
+Block size   Baseline cycles   Simulator cycles   Baseline IPC   Simulator IPC   Register comparison
+16 bytes     57,352            159,852            0.714          0.256           OK
+32 bytes     57,352            108,652            0.714          0.377           OK
+64 bytes     57,352             83,052            0.714          0.493           OK
+
+All configurations retired 40,966 instructions with identical architectural
+register contents. Larger blocks improve this sequential workload because one
+miss supplies more adjacent 4-byte words used by later loads.
+
+Commands used (replace VALUE with 16, 32, or 64):
+  gcc -g -O2 -DDATA_CACHE_BLOCK_SIZE_BYTES=VALUE src/*.c -o sim
+  python3 run.py inputs/cache/stride1.x
