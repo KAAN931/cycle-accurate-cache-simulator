@@ -1,0 +1,13 @@
+# Build artifacts
+sim
+basesim
+*.dSYM/
+
+# OS files
+.DS_Store
+
+# Temporary files
+tmp/
+
+# Test output
+*.txt
