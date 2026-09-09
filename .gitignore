@@ -8,6 +8,3 @@ basesim
 
 # Temporary files
 tmp/
-
-# Temporary files
-test_results.txt
