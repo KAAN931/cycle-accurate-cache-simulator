@@ -1,1 +1,3 @@
 inputs/** linguist-vendored
+*.s linguist-vendored
+*.x binary
