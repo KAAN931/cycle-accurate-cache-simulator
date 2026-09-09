@@ -23,7 +23,7 @@ Added separate instruction and data caches to the pipeline:
 Custom benchmarks were written to test spatial locality, temporal locality,
 block size, associativity, and cache capacity effects on IPC.
 
-## Lab 2 — L2 Cache and DRAM (this submission)
+## Lab 2 — L2 Cache and DRAM
 
 Replaced the fixed 50-cycle L1 miss penalty with a full memory hierarchy. On an
 L1 miss, the L2 cache is now probed in the same cycle, and misses go to a
