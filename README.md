@@ -1,103 +1,125 @@
-# MIPS Cache Timing Simulator
+# MIPS Pipeline Simulator with Memory Hierarchy
 
-This project extends a five-stage MIPS timing simulator with separate
-instruction and data caches. It includes benchmarks for spatial locality,
-temporal locality, block size, associativity, and cache capacity.
+A cycle-accurate five-stage MIPS pipeline timing simulator, built following the
+Lab 1 and Lab 2 specifications from the Computer Architecture course
+(227-2210-00L) by Prof. Onur Mutlu.
 
-## Cache logic
+## What was provided
 
-The default configuration follows the lab specification:
+A skeleton timing simulator (`pipe.c`, `pipe.h`) that models a five-stage
+in-order MIPS pipeline with correct architectural behavior (stalling, bypassing,
+flushing). A baseline simulator (`basesim`) is included for verifying
+architectural correctness.
 
-- Instruction cache: 8 KiB, four-way set associative, 32-byte blocks
-- Data cache: 64 KiB, eight-way set associative, 32-byte blocks
-- Replacement policy: least recently used (LRU)
-- Miss penalty: 50 cycles
-- Initially empty instruction and data caches
+## Lab 1 — L1 Caches
 
-For each access, the simulator determines the memory block, set, and tag:
+Added separate instruction and data caches to the pipeline:
 
-```c
-block_number = address / block_size;
-set = block_number % number_of_sets;
-tag = block_number / number_of_sets;
-```
+- **Instruction cache:** 8 KiB, 4-way set-associative, 32-byte blocks
+- **Data cache:** 64 KiB, 8-way set-associative, 32-byte blocks
+- LRU replacement, initially empty
+- Fixed 50-cycle miss penalty
 
-It searches every way in the selected set for a valid matching tag. A hit
-updates the LRU state. A miss stalls the relevant pipeline stage for 50 cycles,
-then inserts the block into an invalid way or replaces the LRU block.
+Custom benchmarks were written to test spatial locality, temporal locality,
+block size, associativity, and cache capacity effects on IPC.
 
-The data-cache geometry can be changed at compile time using the defaults in
-`src/pipe.h`:
+## Lab 2 — L2 Cache and DRAM (this submission)
 
-```c
-DATA_CACHE_SIZE_BYTES
-DATA_CACHE_BLOCK_SIZE_BYTES
-DATA_CACHE_ASSOCIATIVITY
-```
+Replaced the fixed 50-cycle L1 miss penalty with a full memory hierarchy. On an
+L1 miss, the L2 cache is now probed in the same cycle, and misses go to a
+DRAM-based main memory through a memory controller.
 
-The number of sets is derived automatically from these values. The instruction
-cache remains fixed during the data-cache parameter experiments.
+### Unified L2 Cache
 
-## Building and running
+- 256 KiB, 16-way set-associative, 32-byte blocks (512 sets)
+- Set index: address bits [13:5]
+- 16 MSHRs (miss-status holding registers) to track outstanding misses
+- True LRU replacement; new blocks inserted at MRU position
+- **L2 hit latency:** 15 cycles
+- **L2 miss:** request sent to memory controller after 5 cycles; fill returns
+  to L2 after another 5 cycles once DRAM serves the request
 
-Build and run the default configuration:
+When both the fetch and memory stages hit different blocks in the same L2 set
+in one cycle, the memory-stage block is promoted to MRU-1 and the fetch-stage
+block to MRU.
+
+### DRAM Main Memory
+
+- Single channel, single rank, 8 banks
+- 64K rows per bank, 8 KB per row
+- Bank index: address bits [7:5]; row index: bits [31:16]
+- Row buffers initially closed; open-row policy
+
+**DRAM commands and timing:**
+
+| Command     | Bus usage        | Bank busy |
+|-------------|------------------|-----------|
+| ACTIVATE    | cmd/addr 4 cyc   | 100 cyc   |
+| READ/WRITE  | cmd/addr 4 cyc   | 100 cyc   |
+| PRECHARGE   | cmd/addr 4 cyc   | 100 cyc   |
+| Data xfer   | data bus 50 cyc  | —         |
+
+**Row-buffer scenarios:**
+
+| Scenario            | Command sequence                  |
+|---------------------|-----------------------------------|
+| Row-buffer hit      | READ/WRITE                        |
+| Row-buffer miss     | ACTIVATE, READ/WRITE              |
+| Row-buffer conflict | PRECHARGE, ACTIVATE, READ/WRITE   |
+
+### Memory Controller (FR-FCFS)
+
+The memory controller scans the request queue each cycle and schedules
+requests using FR-FCFS priority:
+
+1. Row-buffer hits over non-hits
+2. Earlier arrivals over later arrivals
+3. Memory-stage requests over fetch-stage requests
+
+A request is schedulable only when all its commands can be issued without
+conflicts on the command/address bus, data bus, and target bank.
+
+## Building and Running
 
 ```bash
-make
-make run
+make            # build the simulator
+make run        # run all tests and compare against baseline
 ```
 
-Run all added cache benchmarks:
+Run a specific test:
 
 ```bash
-python3 run.py \
-  inputs/cache/stride1.x \
-  inputs/cache/stride_long.x \
-  inputs/cache/temporal_frequent.x \
-  inputs/cache/temporal_late.x \
-  inputs/cache/associativity.x \
-  inputs/cache/capacity.x
+make run INPUT=inputs/inst/addiu.x
 ```
 
-To test another data-cache configuration, override one parameter while keeping
-the others at their defaults. For example:
+Build the baseline simulator (provided reference):
 
 ```bash
-gcc -g -O2 -DDATA_CACHE_ASSOCIATIVITY=4 src/*.c -o sim
-python3 run.py inputs/cache/associativity.x
+make basesim
 ```
 
-Restore the default configuration after a sweep:
+## Project Structure
 
-```bash
-gcc -g -O2 src/*.c -o sim
+```
+src/
+  pipe.c    - pipeline simulator with L1/L2 cache and DRAM logic
+  pipe.h    - data structures (caches, MSHRs, DRAM banks, requests)
+  mips.h    - MIPS instruction definitions
+  shell.c   - interactive simulator shell
+  shell.h   - shell header
+inputs/       - test programs (.x binaries)
+run.py        - automated test runner
+Makefile      - build system
 ```
 
-## Test results
+## Test Results
 
-Detailed baseline comparisons, cycles, IPC values, and reproduction commands
-are stored in the following files:
+Baseline comparison outputs (architectural correctness verified; cycle counts
+differ due to the modeled memory hierarchy):
 
 - [Spatial-locality results](stride_test_results.txt)
 - [Temporal-locality results](temporal_test_results.txt)
 - [Block-size comparison](block_size_compare_results.txt)
 - [Associativity comparison](associativity_compare_results.txt)
 - [Cache-size comparison](cache_size_compare_results.txt)
-- [Complete simulator test results](test_results.txt)
-
-All added benchmarks produce architectural register contents identical to the
-baseline simulator. Cycle counts and IPC differ because the baseline does not
-model the added cache-miss delays.
-
-## Main conclusions
-
-- Larger blocks help sequential accesses by exploiting spatial locality, but
-  do not help patterns that move to a different block on every access.
-- Frequent reuse produces temporal-locality hits while reuse after enough
-  same-set conflicts causes eviction under LRU.
-- Greater associativity prevents conflict misses when several active blocks
-  map to the same set.
-- Greater capacity prevents repeated scans from thrashing when the complete
-  working set fits in the cache.
-- Increasing a cache parameter further provides no additional IPC improvement
-  once the benchmark's relevant locality requirement is satisfied.
+- [Full test results](test_results.txt)

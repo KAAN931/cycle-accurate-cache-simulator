@@ -14,7 +14,6 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
-
 //#define DEBUG
 
 /* debug */
@@ -32,13 +31,337 @@ void print_op(Pipe_Op *op)
 Pipe_State pipe;
 cache_I cache;
 cache_D data_cache;
+mshr mshr_array[16];
+int L2_stall;
+int stall_L2_miss;
+cache_L2 L2_cache;
+int L2_hits_in_a_cycle;
+request request_array[16];
+int open_row_in_bank[8];
+int cmd_bus_tracker[500];
+int data_bus_tracker[500];
+bank banks[8];
+request schedulable_request[16];
+int get_row_buffer_status(uint32_t address){
+    //0:hit, 1:miss, 2:conflict
+    int row=address>>16;
+    int bank=(address>>5)&0X7;
+    if(open_row_in_bank[bank]==row){
+        return 0;
+    }
+    else if(open_row_in_bank[bank]==-1){
+        return 1;
+    }
+    else{
+        return 2;
+    }
+}
+void init_row(){
+    for(int i=0;i<8;i++){
+        open_row_in_bank[i]= -1;
+    }
+}
+void init_request_array(){
+    for(int i=0;i<16;i++){
+        request_array[i].is_free=1;
+    }
+}
+void init_schedulable_array(){
+    for(int i=0;i<16;i++){
+        schedulable_request[i].is_free=1;
+    }
+}
+void l2_cache_replacement(int index){
+        cache_block *selected_cache;
+        u_int32_t tag=(mshr_array[index].addr>>14)&0x3FFFF;
+        uint32_t set=(mshr_array[index].addr>>5)&0X1FF;
+        int num_ways=16;
+        int lru=1;
+        selected_cache=L2_cache.cache_set_I_L2[set].cache_block;
+                for(int ways=0;ways<num_ways;ways++){
+                    if(!selected_cache[ways].valid){
+                        selected_cache[ways].valid=1;
+                        selected_cache[ways].tag=tag;
+                        selected_cache[ways].lru_counter=0;
+                        selected_cache[ways].dirty=0;
+                            for(int i=0;i<num_ways;i++){
+                                if(!(i==ways)&&selected_cache[i].valid){
+                                    selected_cache[i].lru_counter++;
+                                }         
+                }
+                        if(mshr_array[index].is_mem==1&&mshr_array[index].mem_write){
+                            selected_cache[ways].dirty=1;
+                            }
+                        lru=0;
+                        break;
+                            }
+                        }
+                if(lru){
+                        int max=0;
+                        int maxindex=0;
+                        for(int ways=0;ways<num_ways;ways++){
+                            if(selected_cache[ways].lru_counter>max){
+                                max=selected_cache[ways].lru_counter;
+                                maxindex=ways;
+                            }
+                            }
+                            selected_cache[maxindex].lru_counter=0;
+                            selected_cache[maxindex].tag=tag;
+                            selected_cache[maxindex].dirty=0;
+                            if(mshr_array[index].is_mem&&mshr_array[index].mem_write){
+                                selected_cache[maxindex].dirty=1;
+                            }
+                        for(int i=0;i<num_ways;i++){
+                                if(!(i==maxindex)&&selected_cache[i].valid){
+                                    selected_cache[i].lru_counter++;
+                                }
+                                
+                }
+                    } 
+
+
+}
+void set_offsets(){
+    for(int i=0;i<16;i++){
+    if(request_array[i].is_free==0){
+        request_array[i].status=get_row_buffer_status(request_array[i].addr);
+        if(request_array[i].status==0){
+            request_array[i].offset_array[0].duration=4;
+            request_array[i].offset_array[0].start=0;
+            request_array[i].offset_array[1].duration=100;
+            request_array[i].offset_array[1].start=0;
+            request_array[i].offset_array[2].duration=50;
+            request_array[i].offset_array[2].start=100;  
+            request_array[i].num_actions=3;            
+        }
+        else if(request_array[i].status==1){
+            request_array[i].offset_array[0].duration=4;
+            request_array[i].offset_array[0].start=0;
+
+            request_array[i].offset_array[1].duration=100;
+            request_array[i].offset_array[1].start=0;
+
+            request_array[i].offset_array[2].duration=4;
+             request_array[i].offset_array[2].start=100;  
+
+            request_array[i].offset_array[3].duration=100;
+            request_array[i].offset_array[3].start=100;
+            
+            request_array[i].offset_array[4].start=200;
+            request_array[i].offset_array[4].duration=50;
+            request_array[i].num_actions=5;  
+        }
+        else if(request_array[i].status==2){
+            request_array[i].offset_array[0].duration=4;
+            request_array[i].offset_array[0].start=0;
+
+            request_array[i].offset_array[1].duration=100;
+            request_array[i].offset_array[1].start=0;
+
+            request_array[i].offset_array[2].duration=4;
+            request_array[i].offset_array[2].start=100;  
+
+            request_array[i].offset_array[3].duration=100;
+            request_array[i].offset_array[3].start=100;
+
+            request_array[i].offset_array[4].start=200;
+            request_array[i].offset_array[4].duration=4;
+
+            request_array[i].offset_array[5].start=200;
+            request_array[i].offset_array[5].duration=100;  
+            
+            request_array[i].offset_array[6].start=300;
+            request_array[i].offset_array[6].duration=50;
+
+            request_array[i].num_actions=7;  
+    }
+}
+}
+}
+void schedulable(){
+    set_offsets();
+    for(int i=0;i<16;i++){
+        if(request_array[i].is_free==0){
+            int not_continue=0;
+            int bank_index=(request_array[i].addr>>5)&0X7;
+            int row_index=request_array[i].addr>>16;
+            for(int j=0;j<request_array[i].num_actions;j++){
+                if(not_continue==1){
+                    break;
+                }
+                if(j==request_array[i].num_actions-1){
+                    for(int k=0;k<request_array[i].offset_array[j].duration;k++){
+                        if(data_bus_tracker[(stat_cycles+request_array[i].offset_array[j].start+k)%500]==0){
+                            continue;
+                        }
+                        else{
+                            not_continue=1;
+                            break;
+                        }
+                    }
+                }
+                else if(j%2==0){
+                    for(int k=0;k<request_array[i].offset_array[j].duration;k++){
+                        if(cmd_bus_tracker[(stat_cycles+request_array[i].offset_array[j].start+k)%500]==0){
+                            continue;
+                        }
+                        else{
+                            not_continue=1;
+                            break;
+                        }
+                    }
+                }
+                else{
+                    for(int k=0;k<request_array[i].offset_array[j].duration;k++){
+                        if(banks[bank_index].bank_tracker[(stat_cycles+request_array[i].offset_array[j].start+k)%500]==0){
+                            continue;
+                        }
+                        else{
+                            not_continue=1;
+                            break;
+                        }
+                    }
+                }
+                if(!not_continue){
+                if(j==request_array[i].num_actions-1){
+                    for(int t=0;t<16;t++){
+                        if(schedulable_request[t].is_free==1){
+                            schedulable_request[t]=request_array[i];
+                            schedulable_request[t].is_free=0;
+                            schedulable_request[t].bank_index=bank_index;
+                            schedulable_request[t].row_index=row_index;
+                            schedulable_request[t].original_index=i;
+                            break;
+                        }
+                    }
+                }
+            }
+            }
+        }
+    }
+}
+void controller(){
+    schedulable();
+    request best_candidate;
+    int count=0;
+    int index;
+    for(int i=0;i<16;i++){
+        if(schedulable_request[i].is_free==0){
+            count++;
+        }
+    }
+    for(int i=0;i<16;i++){
+        if(schedulable_request[i].is_free==0){
+            best_candidate=schedulable_request[i];
+            index=i;
+            break;
+        }
+    }
+    if(count==0){
+        for(int i=0;i<8;i++){
+            banks[i].bank_tracker[stat_cycles%500]=0;
+        }
+        cmd_bus_tracker[stat_cycles%500]=0;
+        data_bus_tracker[stat_cycles%500]=0;
+
+
+        return;
+    }
+    else if(count>1){
+    for(int i=0;i<16;i++){
+        if(schedulable_request[i].is_free==0){
+        if((open_row_in_bank[schedulable_request[i].bank_index]==schedulable_request[i].row_index)&&!(open_row_in_bank[best_candidate.bank_index]==best_candidate.row_index)){
+            best_candidate=schedulable_request[i];
+            index=i;
+        }
+        else if(((open_row_in_bank[schedulable_request[i].bank_index]==schedulable_request[i].row_index))==(open_row_in_bank[best_candidate.bank_index]==best_candidate.row_index)){
+            if(schedulable_request[i].arrival_cycle<best_candidate.arrival_cycle){
+                best_candidate=schedulable_request[i];
+                index=i;
+            }
+            else if(schedulable_request[i].arrival_cycle==best_candidate.arrival_cycle){
+                if(schedulable_request[i].is_mem_req){
+                    best_candidate=schedulable_request[i];
+                    index=i;
+                }
+            }
+        }
+    }
+    }
+    }
+    if(best_candidate.num_actions==3){
+        mshr_array[best_candidate.mshr_index].memory_done_cycle=stat_cycles+150;
+    }
+   else if(best_candidate.num_actions==5){
+        mshr_array[best_candidate.mshr_index].memory_done_cycle=stat_cycles+250;
+   }
+   else if(best_candidate.num_actions==7){
+        mshr_array[best_candidate.mshr_index].memory_done_cycle=stat_cycles+350;
+   }
+   mshr_array[best_candidate.mshr_index].scheduled=1;
+   for(int i=0;i<16;i++){
+    schedulable_request[i].is_free=1;
+   }
+   request_array[best_candidate.original_index].is_free=1;
+   //open row
+    open_row_in_bank[best_candidate.bank_index]=best_candidate.row_index;
+
+    //occupy the cycles based on selected request
+    for(int i=0;i<best_candidate.num_actions;i++){
+        if(i==best_candidate.num_actions-1){
+            for(int j=0;j<50;j++){
+                data_bus_tracker[(stat_cycles+best_candidate.offset_array[i].start+j)%500]=1;
+            }
+        } 
+        else if(i%2==0){
+            for(int k=0;k<best_candidate.offset_array[i].duration;k++){
+                cmd_bus_tracker[(stat_cycles+best_candidate.offset_array[i].start+k)%500]=1;
+            }
+        }
+        else{
+            for(int k=0;k<best_candidate.offset_array[i].duration;k++){
+                banks[best_candidate.bank_index].bank_tracker[(stat_cycles+best_candidate.offset_array[i].start+k)%500]=1;
+            }
+        }
+    }
+    for(int i=0;i<8;i++){
+        banks[i].bank_tracker[stat_cycles%500]=0;
+    }
+    cmd_bus_tracker[stat_cycles%500]=0;
+    data_bus_tracker[stat_cycles%500]=0;
+
+    }
+
+
+
+
+
 
 void pipe_init()
 {
+
+    init_row();
+    init_request_array();
+    init_schedulable_array();
     memset(&pipe, 0, sizeof(Pipe_State));
     pipe.PC = 0x00400000;
+    for(int i=0;i<16;i++){
+    mshr_array[i].state=0;
 }
 
+}
+void send_request(u_int32_t address,int arrival_cycle,int is_mem,int mshr_index){
+    for(int i=0;i<16;i++){
+        if(request_array[i].is_free==1){
+            request_array[i].addr=address;
+            request_array[i].arrival_cycle=arrival_cycle;
+            request_array[i].is_mem_req=is_mem;
+            request_array[i].mshr_index=mshr_index;
+            request_array[i].is_free=0;
+            break;
+        }
+    }
+}
 void pipe_cycle()
 {
 #ifdef DEBUG
@@ -49,6 +372,54 @@ void pipe_cycle()
     printf("WB   : "); print_op(pipe.wb_op);
     printf("\n");
 #endif
+    int request_index;
+    int request_state=0;
+    L2_hits_in_a_cycle=0;
+    int address;
+    int arrival_cycle;
+    int is_mem;
+    int mshr_index;
+
+    //memory state machine for handling communication between L2 and DRAM
+    for(int i=0;i<16;i++){
+        if(mshr_array[i].valid==1){
+            request_index=i;
+            request_state=mshr_array[i].state;
+            address=mshr_array[i].addr;
+            arrival_cycle=mshr_array[i].arrival_cycle;
+            is_mem=mshr_array[i].is_mem;
+        
+        switch(request_state){
+            //free,stall
+            case 0:
+                if(stat_cycles>=mshr_array[i].send_to_mc_cycle){
+                    send_request(address,arrival_cycle,is_mem,request_index);
+                    mshr_array[i].state=1;
+                }
+                break;
+            case 1:
+            if(mshr_array[i].scheduled){
+                if(stat_cycles>=mshr_array[i].memory_done_cycle){
+                    mshr_array[i].state=2;
+                    mshr_array[i].fill_ready_cycle=stat_cycles+5;
+                }
+            }
+            else{
+                mshr_array[i].state=1;
+            }
+                break;
+            case 2:
+                if(stat_cycles>=mshr_array[i].fill_ready_cycle){
+                    l2_cache_replacement(i);
+                    mshr_array[i].valid=0;
+                    mshr_array[i].done=1;
+                    mshr_array[i].state=0;
+                    mshr_array[i].fetch_done=1;
+               } 
+               break;              
+        }
+        }
+    }
 
     pipe_stage_wb();
     if (!RUN_BIT)
@@ -57,14 +428,20 @@ void pipe_cycle()
     pipe_stage_execute();
     pipe_stage_decode();
     pipe_stage_fetch();
+    controller();
 
     /* handle branch recoveries */
     if (pipe.branch_recover) {
 #ifdef DEBUG
         printf("branch recovery: new dest %08x flush %d stages\n", pipe.branch_dest, pipe.branch_flush);
 #endif
-
-        pipe.PC = pipe.branch_dest;
+        //fetch cancellation asks for the same adress,L2 miss path is already handled but this check handles where it is a hit and asks for the same block
+        int temp=pipe.PC;
+        pipe.PC = pipe.branch_dest;       
+        if(!(((temp&0XFFFFFFE0)<=pipe.PC)&&(pipe.PC<((temp&0XFFFFFFE0)+32)))){
+            pipe.IF_cache_state=0;  
+        }
+        
 
         if (pipe.branch_flush >= 2) {
             if (pipe.decode_op) free(pipe.decode_op);
@@ -106,21 +483,118 @@ void pipe_recover(int flush, uint32_t dest)
     pipe.branch_flush = flush;
     pipe.branch_dest = dest;
 }
+//allocate mshr
+int L2_allocate(uint32_t address,int option,Pipe_Op* op){
+    int index=-1;
+    for(int i=0;i<16;i++){
+        if(mshr_array[i].valid==0){
+            mshr_array[i].valid=1;
+            if(option==0){
+                mshr_array[i].fetch_done=0;
+            }
+            else{
+                mshr_array[i].done=0;
+                mshr_array[i].is_mem=1;
+                if(op->mem_write){
+                    mshr_array[i].mem_write=1;
+                }
+                else{
+                    mshr_array[i].mem_write=0;
+                }
+            }
+            mshr_array[i].addr=address;
+            mshr_array[i].is_mem=option;
+            mshr_array[i].arrival_cycle=stat_cycles;
+            mshr_array[i].scheduled=0;
+            index=i;
+            break;
+        }
+    }
+    if(option){
+        op->mshr_index=index;
+    }
+    else{
+        pipe.IF_mshr_index=index;
+    }
+    return index;
+}
+
+
+int L2_logic(u_int32_t address,int option,Pipe_Op* op){
+        u_int32_t tag=(address>>14)&0x3FFFF;
+        uint32_t set=(address>>5)&0X1FF;
+        int hit=0;
+        int valid=0;
+        int indexblock;
+        int on_its_way=0;
+    //miss  based on address
+        for(int ways=0;ways<16;ways++){
+                hit=(tag==L2_cache.cache_set_I_L2[set].cache_block[ways].tag);
+                valid=L2_cache.cache_set_I_L2[set].cache_block[ways].valid;
+                if(hit&&valid){
+                    indexblock=ways;
+                    break;
+                }
+            }
+    //actual logic
+    if(!(hit&&valid)){
+        //handles the case where a fetch cancelletion also asks for the same block from the L2 cache,fixing the another 100 cycle delay caused by it
+            for(int i=0;i<16;i++){
+                if(mshr_array[i].valid){
+                    if(((address&0XFFFFFFE0)<=mshr_array[i].addr)&&(mshr_array[i].addr<(address&0XFFFFFFE0)+32)){
+                        pipe.IF_mshr_index=i;
+                        on_its_way=1;
+                        return i;
+                    }  
+                }
+            }
+            if(!(on_its_way)){
+                int return_index=L2_allocate(address,option,op);
+                mshr_array[return_index].send_to_mc_cycle=stat_cycles+5;
+                return return_index;
+            }
+        }
+    else{
+            L2_cache.cache_set_I_L2[set].cache_block[indexblock].tag=tag;  
+                    int prevcounter=L2_cache.cache_set_I_L2[set].cache_block[indexblock].lru_counter;
+                    L2_cache.cache_set_I_L2[set].cache_block[indexblock].lru_counter=0;
+                    for(int i=0;i<16;i++){
+                        if(L2_cache.cache_set_I_L2[set].cache_block[i].lru_counter<prevcounter&&!(i==indexblock)&&(L2_cache.cache_set_I_L2[set].cache_block[i].valid)){
+                            L2_cache.cache_set_I_L2[set].cache_block[i].lru_counter++;
+                        }
+                    }
+                    if(option==1&&op->mem_write){
+                        L2_cache.cache_set_I_L2[set].cache_block[indexblock].dirty=1;
+                    }
+            
+        }
+    
+    return -1;
+
+}
+
+
+
+
 int cache_replacement(uint32_t address,int option,Pipe_Op *op){
     uint32_t tag;
     uint32_t set;
     int num_ways;
     cache_block *selected_cache;
-    int *selected_stall;
+    uint32_t *selected_stall;
     int hit=0;
     int valid=0;
     int lru=1;
+    int *state;
+    int index;
     if(option==0){
         tag=(address>>11)&0x1FFFFF;
         set=(address>>5)&0X3F;
         num_ways=4;
         selected_cache=cache.cache_set[set].cache_block;
-        selected_stall=&pipe.fetch_stall_cycles;
+        selected_stall=&pipe.IF_l2_hit_ready_cycle;
+        state=&pipe.IF_cache_state;
+        index=pipe.IF_mshr_index;
     }
     else{
          uint32_t block_number =
@@ -129,17 +603,77 @@ int cache_replacement(uint32_t address,int option,Pipe_Op *op){
          tag=block_number / DATA_CACHE_NUM_SETS;
          num_ways=DATA_CACHE_ASSOCIATIVITY;
          selected_cache=data_cache.cache_set[set].cache_block;
-         selected_stall=&pipe.mem_stall_cycles;
+         selected_stall=&op->l2_hit_ready_cycle;
+         state=&op->cache_state;
+         index=op->mshr_index;
     }
     int indexblock=0;
-    if(*selected_stall>0){
-        (*selected_stall)--;
-        if(*selected_stall>0){
-            return 0;
+        if(*state==0){
+            for(int ways=0;ways<num_ways;ways++){
+                hit=(tag==selected_cache[ways].tag);
+                valid=selected_cache[ways].valid;
+                if(hit&&valid){
+                    indexblock=ways;
+                    break;
+                }
+            }
+            if(hit&&valid){
+                    int prevcounter=selected_cache[indexblock].lru_counter;
+                    selected_cache[indexblock].lru_counter=0;
+                    for(int i=0;i<num_ways;i++){
+                        if(selected_cache[i].lru_counter<prevcounter&&!(i==indexblock)&&(selected_cache[i].valid)){
+                            selected_cache[i].lru_counter++;
+                        }
+                    }
+                    if(option==1&&op->mem_write){
+                        selected_cache[indexblock].dirty=1;
+                    }
+                    return 1;
+                }
+            else{
+                    //allocate MSHR
+                    int mshr_index=L2_logic(address,option,op);
+                    if(mshr_index>=0){
+                        *state=1;
+                    }
+                    else{
+                        *selected_stall =stat_cycles+15;
+                        *state=3;
+                    }
+                    
+                    
+                }
+                return 0;
         }
-        if(*selected_stall==0){
-            //insert the new block into the cache
-                for(int ways=0;ways<num_ways;ways++){
+    else if(*state==1){
+        if(option==0){
+            if(mshr_array[index].fetch_done==1){
+                *state=2;
+            }
+            else{
+                return 0;
+            }  
+        }
+        else{
+            if(mshr_array[index].done==1){
+                *state=2;
+            }
+            else{
+                return 0;
+            }  
+        }
+   
+    }
+    else if(*state==3){
+            if(stat_cycles>=*selected_stall){
+                *state=2;
+            }
+            else{
+                return 0;
+            }     
+    }
+    if (*state == 2){
+        for(int ways=0;ways<num_ways;ways++){
                     if(!selected_cache[ways].valid){
                         selected_cache[ways].valid=1;
                         selected_cache[ways].tag=tag;
@@ -154,6 +688,7 @@ int cache_replacement(uint32_t address,int option,Pipe_Op *op){
                             selected_cache[ways].dirty=1;
                             }
                         lru=0;
+                        
                         break;
                             }
                         }
@@ -180,37 +715,16 @@ int cache_replacement(uint32_t address,int option,Pipe_Op *op){
                                 
                 }
                     }   
-                    return 1;
+                    *state=4;
+                    return 0;
     }
+    else if(*state==4){
+        *state=0;
+        return 1;
     }
-    else{
-        for(int ways=0;ways<num_ways;ways++){
-                hit=(tag==selected_cache[ways].tag);
-                valid=selected_cache[ways].valid;
-                if(hit&&valid){
-                    indexblock=ways;
-                    break;
-                }
-            }
-        if(hit&&valid){
-                int prevcounter=selected_cache[indexblock].lru_counter;
-                selected_cache[indexblock].lru_counter=0;
-                for(int i=0;i<num_ways;i++){
-                    if(selected_cache[i].lru_counter<prevcounter&&!(i==indexblock)&&(selected_cache[i].valid)){
-                        selected_cache[i].lru_counter++;
-                    }
-                }
-                if(option==1&&op->mem_write){
-                    selected_cache[indexblock].dirty=1;
-                }
-                return 1;
-            }
-        else{
-            *selected_stall=50;
-             return 0;
-            }
-        }
-        return 0;
+
+
+        return -1;
 }
 
 void pipe_stage_wb()
