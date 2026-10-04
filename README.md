@@ -1,4 +1,4 @@
-# MIPS Pipeline Simulator with Memory Hierarchy
+# Pipeline Simulator with Memory Hierarchy
 
 A cycle-accurate five-stage MIPS pipeline timing simulator, built following the
 Lab 1 and Lab 2 specifications from the Computer Architecture course
