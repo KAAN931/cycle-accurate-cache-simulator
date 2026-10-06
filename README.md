@@ -1,6 +1,6 @@
 # Pipeline Simulator with Memory Hierarchy
 
-A cycle-accurate five-stage MIPS pipeline timing simulator, built following the
+A cycle-accurate five-stage pipeline timing simulator, built following the
 Lab 1 and Lab 2 specifications from the Computer Architecture course
 (227-2210-00L) by Prof. Onur Mutlu.
 
